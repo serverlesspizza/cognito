@@ -1,0 +1,135 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Serverless Pizza Infrastructure for Cognito
+
+Parameters:
+  Environment:
+    Description: The environment
+    Type: String
+
+Resources:
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub serverlesspizza-${Environment}-user-pool
+      UsernameAttributes:
+        - email
+      LambdaConfig:
+        PreSignUp: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:serverlesspizza-${Environment}-pre-signup-lambda
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub serverlesspizza-${Environment}-website-client
+      GenerateSecret: false
+      UserPoolId: !Ref UserPool
+
+  IdentityPool:
+    Type: AWS::Cognito::IdentityPool
+    Properties:
+      IdentityPoolName: !Sub serverlesspizza_${Environment}_identity_pool
+      AllowUnauthenticatedIdentities: true
+      CognitoIdentityProviders:
+        - ClientId: !Ref UserPoolClient
+          ProviderName: !GetAtt UserPool.ProviderName
+
+  LambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: "lambda:InvokeFunction"
+      Principal: "cognito-idp.amazonaws.com"
+      FunctionName: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:serverlesspizza-${Environment}-pre-signup-lambda
+      SourceArn:
+        Fn::Sub: arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/${UserPool}
+
+  CognitoAuthorizedRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub serverlesspizza-${Environment}-cognito-authorised-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Federated: "cognito-identity.amazonaws.com"
+            Action:
+              - "sts:AssumeRoleWithWebIdentity"
+            Condition:
+              StringEquals:
+                "cognito-identity.amazonaws.com:aud": !Ref IdentityPool
+              "ForAnyValue:StringLike":
+                "cognito-identity.amazonaws.com:amr": authenticated
+      Policies:
+        - PolicyName: "CognitoAuthorizedPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "mobileanalytics:PutEvents"
+                  - "cognito-sync:*"
+                  - "cognito-identity:*"
+                  - "execute-api:Invoke"
+                  - "execute-api:ManageConnections"
+                Resource: "*"
+              - Effect: "Allow"
+                Action:
+                  - "lambda:InvokeFunction"
+                Resource: "*"
+
+  CognitoUnauthorizedRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub serverlesspizza-${Environment}-cognito-unauthorised-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Federated: "cognito-identity.amazonaws.com"
+            Action:
+              - "sts:AssumeRoleWithWebIdentity"
+            Condition:
+              StringEquals:
+                "cognito-identity.amazonaws.com:aud": !Ref IdentityPool
+              "ForAnyValue:StringLike":
+                "cognito-identity.amazonaws.com:amr": unauthenticated
+      Policies:
+        - PolicyName: "CognitoUnauthorizedPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "mobileanalytics:PutEvents"
+                  - "cognito-sync:*"
+                  - "execute-api:Invoke"
+                  - "execute-api:ManageConnections"
+                Resource: "*"
+
+  IdentityPoolRoleAttachment:
+    DependsOn:
+      - CognitoAuthorizedRole
+      - CognitoUnauthorizedRole
+    Type: AWS::Cognito::IdentityPoolRoleAttachment
+    Properties:
+      IdentityPoolId: !Ref IdentityPool
+      Roles:
+        authenticated: !GetAtt CognitoAuthorizedRole.Arn
+        unauthenticated: !GetAtt CognitoUnauthorizedRole.Arn
+
+Outputs:
+  UserPoolId:
+    Value: !Ref UserPool
+    Description: User pool
+    Export:
+      Name: !Sub serverlesspizza-${Environment}-user-pool
+  UserPoolWebClientId:
+    Value: !Ref UserPoolClient
+    Description: User Pool Web Client
+    Export:
+      Name: !Sub serverlesspizza-${Environment}-userpool-web-client
+  IdentityPoolId:
+    Value: !Ref IdentityPool
+    Description: Identity Pool
+    Export:
+      Name: !Sub serverlesspizza-${Environment}-identity-pool
